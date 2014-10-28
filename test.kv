@@ -1,0 +1,21 @@
+RootWidget:
+	Carousel:
+		id: carousel
+		
+<DriveProgressTracker>:
+	canvas:
+		Color:
+			rgba: (1., 1., 1., 1.)
+		Rectangle:
+			size: self.size
+			pos: self.pos
+		Color:
+			rgba: (0., 1., 0., 1.)
+		Rectangle:
+			size: (self.change_multiplier*self.width, self.height)
+			pos: self.pos
+
+
+
+
+
