@@ -6,12 +6,15 @@ import os
 
 class DBInterface(object):
 
-    def __init__(self, data_dir, name, do_date=False, **kwargs):
+    def __init__(self, data_dir, name, do_date=False, do_hour=False, **kwargs):
         super(DBInterface, self).__init__(**kwargs)
         
         self.ensure_dir(data_dir)
         if do_date:
-            date = self.convert_time_to_json_ymd(self.get_time())
+            if do_hour:
+                date = self.convert_time_to_json_ymdh(self.get_time())
+            else:
+                date = self.convert_time_to_json_ymd(self.get_time())
             json_name = data_dir + name + '-' + date + '.json'
             reset_json_name = (
                 data_dir + name + '-' + date + '-reset_timers.json')
@@ -84,7 +87,7 @@ class DBInterface(object):
             print(value, 'not found in: ', table, row, name)
         self.sync()
 
-    def append_entry(self, table, row, name, value):
+    def append_entry(self, table, row, name, value, do_timestamp=False):
         data = self.data
         try:
             table_data = data[table]
@@ -99,11 +102,15 @@ class DBInterface(object):
         except:
             name_data = {'value': []}
             row_data[name] = name_data
+        if do_timestamp:
+            time = self.get_time()
+            time_stamp = self.convert_time_to_json(time)
+            value = (value, time_stamp)
         name_data['value'].append(value)
         self.sync()
 
     def set_entry(self, table, row, name, value, do_history=False,
-        reset_in_hours=None):
+        reset_in_hours=None, do_timestamp=False):
         data = self.data
         print('set_entry', table, row, name, value)
         try:
@@ -124,6 +131,10 @@ class DBInterface(object):
         if name_data['value'] != value:
             
             name_data['value'] = value
+            if do_timestamp:
+                time = self.get_time()
+                time_stamp = self.convert_time_to_json(time)
+                name_data['time_stamp'] = time_stamp
             if do_history:
                 time = self.get_time()
                 time_stamp = self.convert_time_to_json(time)
@@ -138,7 +149,12 @@ class DBInterface(object):
                     'row': row,
                     'name': name,
                     }
+
         self.sync()
+        if self.data[table] == {}:
+            self.data[table] = table_data
+            self.sync()
+
 
 
     def get_time(self):
@@ -147,6 +163,12 @@ class DBInterface(object):
     def convert_time_to_json_ymd(self, datetime):
         if datetime is not None:
             return datetime.strftime('%Y-%m-%d')
+        else:
+            return None
+
+    def convert_time_to_json_ymdh(self, datetime):
+        if datetime is not None:
+            return datetime.strftime('%Y-%m-%dT%H')
         else:
             return None
 

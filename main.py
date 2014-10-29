@@ -200,9 +200,8 @@ class DriveMainThread(Thread):
         http = httplib2.Http()
         http = credentials.authorize(http)
         self.drive_service = drive_service = build('drive', 'v2', http=http)
-        self.thread_pool = thread_pool = DriveDownloadPool(2, queue, 
+        self.thread_pool = thread_pool = DriveThreadPool(2, queue, 
             credentials)
-
 
     def get_tracked_folder_ids(self, folders_to_track, address):
         drive_data = self.drive_data
@@ -300,22 +299,6 @@ class DriveMainThread(Thread):
                 else:
                     place_address_in_queue(address, file_name, file_id,
                             time_since_epoch, download_url)
-                    
-
-    # def retrieve_page_of_changes(self, page_token, start_change_id, dt):
-    #     param = {'maxResults': 25}
-    #     if start_change_id is not None:
-    #         param['startChangeId'] = start_change_id
-    #     if page_token is not None:
-    #         param['pageToken'] = page_token
-    #     changes = self.drive_service.changes().list(**param).execute()
-    #     result = self.parse_changes(changes)
-    #     if result is not None:
-    #         self.progress_tracker.last_change_id = int(result)
-    #     page_token = changes.get('nextPageToken')
-    #     return page_token:
-    #         Clock.schedule_once(partial(self.retrieve_page_of_changes, 
-    #             page_token, start_change_id), .3)
 
     def retrieve_all_changes(self):
         result = []
@@ -350,7 +333,6 @@ class DriveMainThread(Thread):
                 if not page_token:
                     print('done breaking')
                     break
-    
 
     def parse_changes(self, changes):
         drive_data = self.drive_data
@@ -463,7 +445,8 @@ class DriveMainThread(Thread):
                 print 'An error occurred: %s' % resp
 
 
-class DriveDownloadPool(object):
+class DriveThreadPool(object):
+
     def __init__(self, thread_count, queue, credentials):
         for x in range(thread_count):
             t = DriveContentThread(queue, credentials)
@@ -472,6 +455,7 @@ class DriveDownloadPool(object):
 
 
 class DriveContentThread(Thread):
+
     def __init__(self, queue, credentials):
         super(DriveContentThread, self).__init__()
         self.queue = queue
@@ -487,9 +471,6 @@ class DriveContentThread(Thread):
             if func:
                 func(queue, drive_service, *args, **kwargs)
                 
-
-
-
 
 class TestApp(App):
 
