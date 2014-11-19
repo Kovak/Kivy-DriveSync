@@ -49,7 +49,6 @@ class DBInterface(object):
 
     def trigger_sync(self, dt):
         data = self.data
-        print('syncing')
         data._is_changed = True
         data.store_sync()
         

@@ -10,6 +10,7 @@ from os.path import isfile, join
 import time
 import datetime
 from threading import Thread
+from kivy.uix.carousel import Carousel
 from kivy.compat import queue as Queue
 from apiclient.discovery import build
 from apiclient.http import MediaFileUpload
@@ -25,11 +26,10 @@ from functools import partial
 import json
 from kivy.uix.popup import Popup
 from kivy.uix.floatlayout import FloatLayout
-from kivy.uix.carousel import Carousel
+from flat_kivy.utils import construct_target_file_name
 
-
-storage = Storage('drive_key.secret')
-with open('client_secret.secret', 'rb') as client_secret:
+storage = Storage(construct_target_file_name('drive_key.secret', __file__))
+with open(construct_target_file_name('client_secret.secret', __file__), 'rb') as client_secret:
     data = json.load(client_secret)
     CLIENT_ID = data[u'installed'][u'client_id']
     CLIENT_SECRET = data[u'installed'][u'client_secret']
@@ -39,6 +39,11 @@ with open('client_secret.secret', 'rb') as client_secret:
 # Check https://developers.google.com/drive/scopes for all available scopes
 OAUTH_SCOPE = 'https://www.googleapis.com/auth/drive.readonly'
 
+def start_drive_thread(folders_to_track, pyfile):
+    global drive_main_thread
+    drive_main_thread = DriveMainThread(folders_to_track, 1, pyfile)
+    drive_main_thread.setDaemon(True)
+    drive_main_thread.start()
 
 class DriveProgressTracker(Widget):
     largest_change = NumericProperty(1.)
@@ -73,29 +78,23 @@ class DriveProgressTracker(Widget):
     def on_change_multiplier(self, instance, value):
         print('new mult', value)
         
-class RootWidget(FloatLayout):
+class DriveCarousel(Carousel):
     folders_to_track = ListProperty(['TestImages'])
-    start_sync_at = NumericProperty(1)
-
     
     def __init__(self, **kwargs):
-        super(RootWidget, self).__init__(**kwargs)
+        self.files_being_tracked = {}
+        self.pyfile = pyfile = kwargs.get('pyfile', __file__)
         self.drive_data = DBInterface(os.path.dirname(
-            os.path.abspath(__file__))+'/drive_data/', 'drive_files')
+            os.path.abspath(pyfile))+'/drive_data/', 'drive_files')
+        super(DriveCarousel, self).__init__(**kwargs)
+        folders_to_track = kwargs.get('folders_to_track', 
+            self.folders_to_track)
+        self.set_folders_to_track(folders_to_track)
+        
         self.folder_observers = {}
         self.popup = popup = Popup()
         self.progress_tracker = progress_tracker = DriveProgressTracker()
-        self.files_being_tracked = {}
-        self.carousel = carousel = Carousel(loop=True, scroll_timeout=500.)
-        self.add_widget(carousel)
-        self.drive_main_thread = drive_thread = DriveMainThread(
-            self.folders_to_track, self.start_sync_at, self)
-        drive_thread.setDaemon(True)
-        drive_thread.start()
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        for each in self.folders_to_track:
-            path = base_path + '/' + each + '/'
-            self.track_existing_files(path)
+       
         #Clock.schedule_interval(self.retrieve_all_changes, 30.)
         #Clock.schedule_interval(self.notify_folder_observers, 15.)
         self.schedule_change(0.)
@@ -103,11 +102,21 @@ class RootWidget(FloatLayout):
         Clock.schedule_interval(self.schedule_change, 30.)
 
     def update_carousel(self, dt):
-        self.carousel.load_next()
+        self.load_next()
+
+    def set_folders_to_track(self, folders_to_track):
+        base_path = os.path.dirname(os.path.abspath(self.pyfile))
+        global drive_main_thread
+        self.folders_to_track = folders_to_track
+        for each in folders_to_track:
+            path = base_path + '/' + each + '/'
+            #self.drive_main_thread.ensure_dir(path)
+            drive_main_thread.add_drive_widget(self, path)
+            self.track_existing_files(path)
     
     def schedule_change(self, dt):
-        
-        self.drive_main_thread.update_queue.put(True)
+        global drive_main_thread
+        drive_main_thread.update_queue.put(True)
 
     def track_existing_files(self, path):
         files = [join(path,f) for f in listdir(path) if isfile(join(path,f))]
@@ -118,14 +127,14 @@ class RootWidget(FloatLayout):
         print('adding im', file_add)
         self.files_being_tracked[file_add] = im = Image(source=file_add, 
             allow_stretch=True)
-        self.carousel.add_widget(im)
+        self.add_widget(im)
 
     def remove_image_for_file(self, file_add):
         print('removing im', file_add)
         files_being_tracked = self.files_being_tracked
         try:
             im = files_being_tracked[file_add]
-            self.carousel.remove_widget(im)
+            self.remove_widget(im)
             del files_being_tracked[file_add]
         except:
             print(file_add, 'not found')
@@ -154,8 +163,6 @@ class RootWidget(FloatLayout):
         else:
             self.remove_image_for_file(file_add)
 
-
-
     def notify_folder_observers(self, dt):
         folder_observers = self.folder_observers
         for file_add in self.updated_folders:
@@ -169,22 +176,30 @@ class RootWidget(FloatLayout):
 class DriveMainThread(Thread):
 
 
-    def __init__(self, folders_to_track, start_sync_at, drive_widget, 
-        **kwargs):
+    def __init__(self, folders_to_track, start_sync_at, pyfile, **kwargs):
         super(DriveMainThread, self).__init__(**kwargs)
         self.drive_data = DBInterface(os.path.dirname(
-            os.path.abspath(__file__))+'/drive_data/', 'drive_files')
-        self.folders_to_track = folders_to_track
-        self.drive_widget = drive_widget
+            os.path.abspath(pyfile))+'/drive_data/', 'drive_files')
+        base_path = os.path.dirname(os.path.abspath(pyfile))+'/'
         self.updated_folders = set()
         self.start_sync_at = start_sync_at
+        self.folders_to_track = folders_to_track
         self.setup_drive()
         self.update_queue = Queue.Queue()
-        
         self.get_tracked_folder_ids( 
             folders_to_track, os.path.dirname(
-            os.path.abspath(__file__))+'/')
+            os.path.abspath(pyfile))+'/')
+        self.tracked_widgets = {}
+        self.folders_to_track = [
+            base_path+path+'/' for path in folders_to_track]
 
+    def add_drive_widget(self, widget, folder_to_track):
+        assert(folder_to_track in self.folders_to_track)
+        tracked_widgets = self.tracked_widgets
+        if folder_to_track not in tracked_widgets:
+            tracked_widgets[folder_to_track] = [widget]
+        else:
+            tracked_widgets[folder_to_track].append(widget)
 
     def setup_drive(self):
         credentials = storage.get()
@@ -206,10 +221,12 @@ class DriveMainThread(Thread):
     def get_tracked_folder_ids(self, folders_to_track, address):
         drive_data = self.drive_data
         for folder_name in self.folders_to_track:
+            print(folder_name, address)
             q="title = '{}'".format(folder_name)
             data = self.drive_service.children().list(
                 folderId='root', q=q).execute()
             folder_add = address+folder_name+'/'
+            print(folder_add)
             self.ensure_dir(folder_add)
             #self.add_folder_observer(self.get_callback, unicode(folder_add))
             for dat in data[u'items']:
@@ -291,7 +308,7 @@ class DriveMainThread(Thread):
             parent_id = parent[u'id']
             if parent_id in folders:
                 address = get_entry('folders', parent_id, 'file_add')
-                print(address)
+                print('DOWNLOAD ADDRESS HERE', address)
                 if isinstance(address, list):
                     for add in address:
                         place_address_in_queue(add, file_name, file_id,
@@ -367,13 +384,14 @@ class DriveMainThread(Thread):
     def handle_remove_callback(self, file_id):
         file_adds = self.drive_data.get_entry(
             'tracked_items', file_id, 'file_add')
-        drive_widget = self.drive_widget
-        file_callback = drive_widget.file_callback
+        tracked_widgets = self.tracked_widgets
         if file_adds is not None:
             if isinstance(file_adds, list):
                 for file_add in file_adds:
-                    Clock.schedule_once(partial(file_callback, file_add, 
-                        True))
+                    for wid in tracked_widgets[file_adds]:
+                        file_callback = wid.file_callback
+                        Clock.schedule_once(partial(file_callback, file_add, 
+                            True))
 
     def remove_file(self, file_id):
         drive_data = self.drive_data
@@ -437,9 +455,13 @@ class DriveMainThread(Thread):
                 os.utime(name, (os.stat(name).st_atime, 
                         time))
                 print('scheduled callback', name)
-                Clock.schedule_once(
-                    partial(self.drive_widget.file_callback,
-                        name, False), 15.)
+                folder_name = os.path.dirname(name) + '/'
+                tracked_widgets = self.tracked_widgets
+                print(tracked_widgets)
+                if folder_name in tracked_widgets:
+                    for wid in tracked_widgets[folder_name]:
+                        Clock.schedule_once(partial(wid.file_callback,
+                            name, False), 15.)
                 queue.task_done()
             else:
                 print 'An error occurred: %s' % resp
