@@ -6,7 +6,7 @@ from kivy.uix.button import Button
 import httplib2
 import os
 from os import listdir
-from os.path import isfile, join
+from os.path import isfile, join, dirname
 import time
 import datetime
 from threading import Thread
@@ -27,9 +27,11 @@ import json
 from kivy.uix.popup import Popup
 from kivy.uix.floatlayout import FloatLayout
 from flat_kivy.utils import construct_target_file_name
+import weakref
 
 storage = Storage(construct_target_file_name('drive_key.secret', __file__))
-with open(construct_target_file_name('client_secret.secret', __file__), 'rb') as client_secret:
+with open(construct_target_file_name(
+    'client_secret.secret', __file__), 'rb') as client_secret:
     data = json.load(client_secret)
     CLIENT_ID = data[u'installed'][u'client_id']
     CLIENT_SECRET = data[u'installed'][u'client_secret']
@@ -58,9 +60,6 @@ class DriveProgressTracker(Widget):
     def calculate_change_mult(self):
         if self.start_change_id is not None and not (
             self.start_change_id == self.largest_change): 
-            print('last/start/largest', self.last_change_id, 
-                self.start_change_id, 
-                self.largest_change)
             self.change_multiplier = float(
                 self.last_change_id - self.start_change_id)/float(
                 self.largest_change - self.start_change_id)
@@ -68,15 +67,11 @@ class DriveProgressTracker(Widget):
             self.change_multiplier = 0.
 
     def on_last_change_id(self, instance, value):
-        print('last change', value)
         self.calculate_change_mult()
 
     def on_start_change_id(self, instance, value):
-        print('start_change', value)
         self.calculate_change_mult()
 
-    def on_change_multiplier(self, instance, value):
-        print('new mult', value)
         
 class DriveCarousel(Carousel):
     folders_to_track = ListProperty(['TestImages'])
@@ -111,7 +106,7 @@ class DriveCarousel(Carousel):
         for each in folders_to_track:
             path = base_path + '/' + each + '/'
             #self.drive_main_thread.ensure_dir(path)
-            drive_main_thread.add_drive_widget(self, path)
+            drive_main_thread.add_drive_widget(weakref.ref(self), path)
             self.track_existing_files(path)
     
     def schedule_change(self, dt):
@@ -124,13 +119,11 @@ class DriveCarousel(Carousel):
             self.create_image_for_file(each)
 
     def create_image_for_file(self, file_add):
-        print('adding im', file_add)
         self.files_being_tracked[file_add] = im = Image(source=file_add, 
             allow_stretch=True)
         self.add_widget(im)
 
     def remove_image_for_file(self, file_add):
-        print('removing im', file_add)
         files_being_tracked = self.files_being_tracked
         try:
             im = files_being_tracked[file_add]
@@ -167,7 +160,6 @@ class DriveCarousel(Carousel):
         folder_observers = self.folder_observers
         for file_add in self.updated_folders:
             if str(file_add) in folder_observers:
-                print('true', file_add, 'being observed')
                 callbacks = folder_observers[file_add]
                 for callback in callbacks:
                     callback(file_add)
@@ -215,18 +207,16 @@ class DriveMainThread(Thread):
         http = httplib2.Http()
         http = credentials.authorize(http)
         self.drive_service = drive_service = build('drive', 'v2', http=http)
-        self.thread_pool = thread_pool = DriveThreadPool(2, queue, 
+        self.thread_pool = thread_pool = DriveThreadPool(1, queue, 
             credentials)
 
     def get_tracked_folder_ids(self, folders_to_track, address):
         drive_data = self.drive_data
         for folder_name in self.folders_to_track:
-            print(folder_name, address)
             q="title = '{}'".format(folder_name)
             data = self.drive_service.children().list(
                 folderId='root', q=q).execute()
             folder_add = address+folder_name+'/'
-            print(folder_add)
             self.ensure_dir(folder_add)
             #self.add_folder_observer(self.get_callback, unicode(folder_add))
             for dat in data[u'items']:
@@ -243,7 +233,6 @@ class DriveMainThread(Thread):
 
         for parent in parents:
             parent_id = parent[u'id']
-            print(file_data[u'title'], parent_id, folders)
             if parent_id in folders:
                 return True
         return False
@@ -252,7 +241,6 @@ class DriveMainThread(Thread):
         while True:
             query_download = self.update_queue.get()
             if query_download:
-                print('we should download')
                 self.retrieve_all_changes()
                 self.update_queue.task_done()
        
@@ -308,7 +296,6 @@ class DriveMainThread(Thread):
             parent_id = parent[u'id']
             if parent_id in folders:
                 address = get_entry('folders', parent_id, 'file_add')
-                print('DOWNLOAD ADDRESS HERE', address)
                 if isinstance(address, list):
                     for add in address:
                         place_address_in_queue(add, file_name, file_id,
@@ -322,7 +309,6 @@ class DriveMainThread(Thread):
         page_token = None
         drive_data = self.drive_data
         largest_change = int(self.get_largest_change_id())
-        print('largest', largest_change)
         try:
             start_change_id = str(int(
                 drive_data.get_entry('changes', 'last_change', 'id')) + 1)
@@ -330,7 +316,6 @@ class DriveMainThread(Thread):
             start_change_id = str(int(self.start_sync_at))
         # if self.progress_tracker.start_change_id is None:
         #     self.progress_tracker.start_change_id = int(start_change_id)
-        print('start changes at', start_change_id)
         # self.progress_tracker.last_change_id = int(start_change_id)
         if largest_change >= int(start_change_id):
             print('we should parse')
@@ -388,10 +373,19 @@ class DriveMainThread(Thread):
         if file_adds is not None:
             if isinstance(file_adds, list):
                 for file_add in file_adds:
-                    for wid in tracked_widgets[file_adds]:
-                        file_callback = wid.file_callback
-                        Clock.schedule_once(partial(file_callback, file_add, 
-                            True))
+                    widgets_for_removal = []
+                    widgets_a = widgets_for_removal.append
+                    dir_name = str(dirname(file_add) + '/')
+                    for wid in tracked_widgets[dir_name]:
+                        r_wid = wid()
+                        if r_wid is not None:
+                            file_callback = r_wid.file_callback
+                            Clock.schedule_once(partial(file_callback, 
+                                file_add, True))
+                        else:
+                            widgets_a(wid)
+                    for wid_ref in widgets_for_removal:
+                        tracked_widgets[file_adds].remove(wid_ref)
 
     def remove_file(self, file_id):
         drive_data = self.drive_data
@@ -403,7 +397,6 @@ class DriveMainThread(Thread):
             for file_add in file_adds:
                 try:
                     os.remove(file_add)
-                    print('removing', file_add, file_id)
                     to_remove_a(file_add)
                 except:
                     continue
@@ -448,20 +441,30 @@ class DriveMainThread(Thread):
 
     def _download(self, queue, drive_service, download_url, name, time):
         if download_url:
-            resp, content = drive_service._http.request(download_url)
+            try:
+                resp, content = drive_service._http.request(download_url)
+            except:
+                print 'An error occurred: '
+                return
             if resp.status == 200:
                 with open(name, 'w') as save_file:
                     save_file.write(content)
                 os.utime(name, (os.stat(name).st_atime, 
                         time))
-                print('scheduled callback', name)
                 folder_name = os.path.dirname(name) + '/'
                 tracked_widgets = self.tracked_widgets
-                print(tracked_widgets)
+                widgets_for_removal = []
+                widget_a = widgets_for_removal.append
                 if folder_name in tracked_widgets:
                     for wid in tracked_widgets[folder_name]:
-                        Clock.schedule_once(partial(wid.file_callback,
-                            name, False), 15.)
+                        r_wid = wid()
+                        if r_wid is not None:
+                            Clock.schedule_once(partial(r_wid.file_callback,
+                                name, False), 15.)
+                        else:
+                            widget_a(wid)
+                    for wid_ref in widgets_for_removal:
+                        tracked_widgets[folder_name].remove(wid_ref)
                 queue.task_done()
             else:
                 print 'An error occurred: %s' % resp

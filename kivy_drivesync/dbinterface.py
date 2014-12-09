@@ -1,7 +1,7 @@
 from __future__ import unicode_literals, print_function
 from datetime import datetime, timedelta, date
 from kivy.storage.jsonstore import JsonStore
-from kivy.clock import Clock
+from kivy.clock import Clock, mainthread
 import os
 
 class DBInterface(object):
@@ -74,6 +74,7 @@ class DBInterface(object):
         except:
             return None
 
+    @mainthread
     def remove_entry(self, table, row, name, value):
         data = self.data
         try:
@@ -86,6 +87,7 @@ class DBInterface(object):
             print(value, 'not found in: ', table, row, name)
         self.sync()
 
+    @mainthread
     def append_entry(self, table, row, name, value, do_timestamp=False):
         data = self.data
         try:
@@ -108,6 +110,7 @@ class DBInterface(object):
         name_data['value'].append(value)
         self.sync()
 
+    @mainthread
     def set_entry(self, table, row, name, value, do_history=False,
         reset_in_hours=None, do_timestamp=False):
         data = self.data
@@ -148,11 +151,9 @@ class DBInterface(object):
                     'row': row,
                     'name': name,
                     }
-
-        self.sync()
         if self.data[table] == {}:
             self.data[table] = table_data
-            self.sync()
+        self.sync()
 
 
 
